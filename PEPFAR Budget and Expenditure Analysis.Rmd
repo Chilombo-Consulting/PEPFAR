@@ -20,17 +20,17 @@ When you click the **Knit** button a document will be generated that includes bo
 #1 Download Downloaded PEPFAR’s Public Partner Budgets and Expenditures
 
 library(readr)
-PEPFAR_BUDGET_EXPEND <- read_delim(
-  "~/Documents/R/PEPFAR/Public Partner Budgets and Expenditures.txt"
-) #41,088 observations, 38 variables
+PEPFAR_BUDGET_EXPEND <- read_delim("~/Documents/R/PEPFAR/Public Partner Budgets and Expenditures.txt") #41,088 observations, 38 variables
+```
 
-
-#2Remove USG M&O
+```{r}
+# 2Remove USG M&O
 library (dplyr)
 PEPFAR_BUDGET_EXPEND_noMO <-PEPFAR_BUDGET_EXPEND %>% 
   dplyr::filter(`Partner Name`!= "Management and Operations")  #39,235 observations, 38 variables
+```
 
-
+```{r}
 #3 Calculate total expenditure, budget, and budget execution by year for 2023, 2024, 2025
 library (tidyr)
 library (gtsummary)
@@ -60,24 +60,32 @@ PEPFAR_summary <- PEPFAR_summary %>%
          Total_Expenditure_2024, Total_Budget_2024, Budget_Execution_2024, Total_Expenditure_2025, Total_Budget_2025, Budget_Execution_2025)
 
 PEPFAR_summary
+```
 
+```{r}
 #4 Downloaded Amfar FY2025 Based Analysis Combined (overall grant status tab)
 
 library (readxl)
-PEPFAR_AWARDS<- read_excel("~/Documents/R/PEPFAR/Combined FY2025 PEPFAR Program Status.xlsx") %>%  #1040 obs observations, 7 variables #The Amfar dataset assigns mech ID of 1 for TBD and 2 for unallocated program management
-    
-#5 Triangulated PEPFAR data (FY2025 only) with Amfar Data
-#5F Classified each row as a mechanism, unallocated program management, or TBD 
-  dplyr::mutate(
+PEPFAR_AWARDS<- read_excel("~/Documents/R/PEPFAR/Combined FY2025 PEPFAR Program Status.xlsx") %>%   
+dplyr::mutate(
     `Mechanism Code`= case_when(
       MECHID %in% c(2) ~ "All for OU",
            MECHID %in% c(1) ~ "Redacted as the Partner is to be determined",
       TRUE ~ MECHID
-    ))
+    ))  
+
+PEPFAR_AWARDS
+```
+
+```{r}
+#5 Triangulated PEPFAR data (FY2025 only) with Amfar Data
+  #5G Created an adjusted mechanism ID column to better match the Amfar 
+ 
+
+library(tidyr)
 
 PEPFAR_Combined <-PEPFAR_BUDGET_EXPEND_noMO %>% 
     filter(`Implementation Year` %in% c(2025)) %>% 
-#5G Created an adjusted mechanism ID column to better match the Amfar 
      dplyr::mutate(
     `amFAR_MECHID`= case_when(
       `Mechanism Code` %in% c("All for OU") ~ "2",
@@ -95,9 +103,11 @@ PEPFAR_Combined <-PEPFAR_BUDGET_EXPEND_noMO %>%
       TRUE ~ ISO3
     )) 
 
-#5E Matched adjusted mech ID in Column G to Amfar mech ID to identify status. 
-library(tidyr)
- 
+PEPFAR_Combined    
+```
+
+```{r}
+#5E Matched adjusted mech ID in Column G to Amfar mech ID to identify status.Added a unique identifier UniqueOUAgencyMech for each row to assist with Step 6
 Master_2025Data <- PEPFAR_Combined %>%  left_join(PEPFAR_AWARDS,
        by = c("ISO3_updated"="COUNTRY", "amFAR_MECHID"="MECHID")) %>% 
           dplyr::mutate(
@@ -105,14 +115,14 @@ Master_2025Data <- PEPFAR_Combined %>%  left_join(PEPFAR_AWARDS,
       `STATUS` %in% c(NA) ~ "Not Found",
      TRUE ~ STATUS
     ))  %>% 
-  
- #5E Added a unique identifier UniqueOUAgencyMech for each row to assist with Step 6
-tidyr::unite(UniqueOUAgencyMech, `Operating Unit`, `Funding Agency`,`amFAR_MECHID`, sep = ".", remove = FALSE)  # remove = FALSE keeps original columns
+ tidyr::unite(UniqueOUAgencyMech, `Operating Unit`, `Funding Agency`,`amFAR_MECHID`, sep = ".", remove = FALSE)  
 
 Master_2025Data
+```
+
+```{r}
 
 #6 Added a unique identifier UniqueOUAgencyMech for each row to assist with Step 6
-
 Rolled_up_Master_2025Data <- Master_2025Data %>% 
          dplyr::mutate(
     `Type of Mechanism`= case_when(
@@ -126,7 +136,7 @@ Rolled_up_Master_2025Data <- Master_2025Data %>%
     .groups = "drop"
   )  %>% 
     
-#6 Added columns G & H to indicate whether any budget or any expenditure was reported
+#6A Added columns G & H to indicate whether any budget or any expenditure was reported
 mutate(
   Budget    = if_else(Total_Budget != 0 & !is.na(Total_Budget), "Yes", "No"),
   Expenditure = if_else(Total_Expenditure != 0 & !is.na(Total_Expenditure), "Yes", "No")
@@ -134,8 +144,11 @@ mutate(
 
 Rolled_up_Master_2025Data
 
-#7 Analyzed reporting / non-reporting patterns
+```
 
+```{r}
+
+#7 Analyzed reporting / non-reporting patterns
 
 #REPORTING TABLE 1
 IM_analysis <- Rolled_up_Master_2025Data %>%
@@ -232,6 +245,9 @@ STATUS_analysis <- Rolled_up_Master_2025Data %>%
     )
   )
 STATUS_analysis
+```
+
+```{r}
 
 #8 Created a list of the 512 mechanisms that were active, had a FY2025 budget, and reported FY2025 expenditures
 
@@ -244,9 +260,51 @@ activemechs_analysis <- Rolled_up_Master_2025Data %>%
 
 activemechs_analysis
 
+```
+
+```{r}
+
 #9 Analyzed total expenditures and budgets by sub-program for the 512, and the share of total sub-program budget that the 512 represent
 
+#TABLE 1 =(All Mechs)
+Subprogram_allmechs_analysis<- Master_2025Data %>% 
+group_by(`Sub Program`) %>%
+  summarise(
+    Total_Expenditure = sum(`Total Expenditure`, na.rm = TRUE),
+    Total_Budget      = sum(`Total Planned Funding`, na.rm = TRUE),
+    .groups = "drop"
+  )  %>% 
+        mutate(
+    Budget_Execution = (Total_Expenditure / Total_Budget) * 100,
+    Budget_Execution = round(Budget_Execution, 2)            
+  ) %>%
+  mutate(across(contains(c("Total_Budget", "Total_Expenditure")), 
+                ~ scales::dollar(., accuracy = 1)))  
 
+Subprogram_allmechs_analysis
+
+#TABLE 2 =(512 Only)
+Master_2025Data_subgroup <- Master_2025Data %>% 
+group_by(`UniqueOUAgencyMech`, `Sub Program`)
+
+
+Subprogram_512mechs_analysis <- Master_2025Data_subgroup %>% inner_join(activemechs_analysis,
+       by = c("UniqueOUAgencyMech")) %>% 
+    group_by(`Sub Program`) %>% 
+  summarise(
+    Total_Expenditure = sum(`Total Expenditure`, na.rm = TRUE),
+    Total_Budget      = sum(`Total Planned Funding`, na.rm = TRUE),
+    .groups = "drop"
+  )  %>% 
+        mutate(
+    Budget_Execution = (Total_Expenditure / Total_Budget) * 100,
+    Budget_Execution = round(Budget_Execution, 2)            
+  ) %>%
+  mutate(across(contains(c("Total_Budget", "Total_Expenditure")), 
+                ~ scales::dollar(., accuracy = 1))) 
+    
+
+Subprogram_512mechs_analysis
 
 
 ```
