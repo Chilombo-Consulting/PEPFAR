@@ -1,0 +1,252 @@
+---
+title: "PEPFAR Budget and Expenditure Analysis"
+output: word_document
+date: "2026-06-22"
+author: "Vanessa Da Costa"
+purpose: "verify original analysis"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r}
+#1 Download Downloaded PEPFAR’s Public Partner Budgets and Expenditures
+
+library(readr)
+PEPFAR_BUDGET_EXPEND <- read_delim(
+  "~/Documents/R/PEPFAR/Public Partner Budgets and Expenditures.txt"
+) #41,088 observations, 38 variables
+
+
+#2Remove USG M&O
+library (dplyr)
+PEPFAR_BUDGET_EXPEND_noMO <-PEPFAR_BUDGET_EXPEND %>% 
+  dplyr::filter(`Partner Name`!= "Management and Operations")  #39,235 observations, 38 variables
+
+
+#3 Calculate total expenditure, budget, and budget execution by year for 2023, 2024, 2025
+library (tidyr)
+library (gtsummary)
+
+
+PEPFAR_summary <- PEPFAR_BUDGET_EXPEND_noMO %>%
+filter(!`Implementation Year` %in% c(2021, 2022)) %>% 
+  group_by(`Operating Unit`, `Implementation Year`) %>%
+  summarise(
+    Total_Budget      = sum(`Total Planned Funding`, na.rm = TRUE),
+    Total_Expenditure = sum(`Total Expenditure`, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+    mutate(
+    Budget_Execution = (Total_Expenditure / Total_Budget) * 100,
+    Budget_Execution = round(Budget_Execution, 2)            
+  ) %>%
+  mutate(across(contains(c("Total_Budget", "Total_Expenditure")), 
+                ~ scales::dollar(., accuracy = 1)))  %>% 
+  tidyr::pivot_wider(
+    names_from  = `Implementation Year`,
+    values_from = c(Total_Budget, Total_Expenditure, Budget_Execution) 
+  ) 
+
+PEPFAR_summary <- PEPFAR_summary %>%
+  select(`Operating Unit`,Total_Expenditure_2023, Total_Budget_2023, Budget_Execution_2023,
+         Total_Expenditure_2024, Total_Budget_2024, Budget_Execution_2024, Total_Expenditure_2025, Total_Budget_2025, Budget_Execution_2025)
+
+PEPFAR_summary
+
+#4 Downloaded Amfar FY2025 Based Analysis Combined (overall grant status tab)
+
+library (readxl)
+PEPFAR_AWARDS<- read_excel("~/Documents/R/PEPFAR/Combined FY2025 PEPFAR Program Status.xlsx") %>%  #1040 obs observations, 7 variables #The Amfar dataset assigns mech ID of 1 for TBD and 2 for unallocated program management
+    
+#5 Triangulated PEPFAR data (FY2025 only) with Amfar Data
+#5F Classified each row as a mechanism, unallocated program management, or TBD 
+  dplyr::mutate(
+    `Mechanism Code`= case_when(
+      MECHID %in% c(2) ~ "All for OU",
+           MECHID %in% c(1) ~ "Redacted as the Partner is to be determined",
+      TRUE ~ MECHID
+    ))
+
+PEPFAR_Combined <-PEPFAR_BUDGET_EXPEND_noMO %>% 
+    filter(`Implementation Year` %in% c(2025)) %>% 
+#5G Created an adjusted mechanism ID column to better match the Amfar 
+     dplyr::mutate(
+    `amFAR_MECHID`= case_when(
+      `Mechanism Code` %in% c("All for OU") ~ "2",
+         `Mechanism Code` %in% c("Redacted as the Partner is to be determined") ~ "1",
+      TRUE ~ `Mechanism Code`
+    )) %>% 
+     dplyr::mutate(
+    `ISO3_updated`= case_when(
+      `Operating Unit` %in% c("Caribbean Region") & ISO3=="?"  ~ "CB1",
+      `Operating Unit` %in% c("Central Asia Region")  & ISO3=="?" ~ "AR1",
+       `Operating Unit` %in% c("Central Asia Region")  & is.na(ISO3) ~ "AR1",
+      `Operating Unit` %in% c("Central and South America Region")  & ISO3=="?" ~ "CA1",
+      `Operating Unit` %in% c("West Africa Region 2")  & ISO3=="?" ~ "WA2",
+       `Operating Unit` %in% c("Pacific Region")  & is.na(ISO3) ~ "PR1",
+      TRUE ~ ISO3
+    )) 
+
+#5E Matched adjusted mech ID in Column G to Amfar mech ID to identify status. 
+library(tidyr)
+ 
+Master_2025Data <- PEPFAR_Combined %>%  left_join(PEPFAR_AWARDS,
+       by = c("ISO3_updated"="COUNTRY", "amFAR_MECHID"="MECHID")) %>% 
+          dplyr::mutate(
+    STATUS= case_when(
+      `STATUS` %in% c(NA) ~ "Not Found",
+     TRUE ~ STATUS
+    ))  %>% 
+  
+ #5E Added a unique identifier UniqueOUAgencyMech for each row to assist with Step 6
+tidyr::unite(UniqueOUAgencyMech, `Operating Unit`, `Funding Agency`,`amFAR_MECHID`, sep = ".", remove = FALSE)  # remove = FALSE keeps original columns
+
+Master_2025Data
+
+#6 Added a unique identifier UniqueOUAgencyMech for each row to assist with Step 6
+
+Rolled_up_Master_2025Data <- Master_2025Data %>% 
+         dplyr::mutate(
+    `Type of Mechanism`= case_when(
+      `amFAR_MECHID` %in% c("2") ~ "Unallocated PM",
+         `amFAR_MECHID` %in% c("1") ~ "TBD",
+      TRUE ~ amFAR_MECHID)) %>% 
+    group_by(UniqueOUAgencyMech, `Type of Mechanism`, `Funding Agency`, `STATUS`) %>%
+  summarise(
+    Total_Expenditure = sum(`Total Expenditure`, na.rm = TRUE),
+    Total_Budget      = sum(`Total Planned Funding`, na.rm = TRUE),
+    .groups = "drop"
+  )  %>% 
+    
+#6 Added columns G & H to indicate whether any budget or any expenditure was reported
+mutate(
+  Budget    = if_else(Total_Budget != 0 & !is.na(Total_Budget), "Yes", "No"),
+  Expenditure = if_else(Total_Expenditure != 0 & !is.na(Total_Expenditure), "Yes", "No")
+)
+
+Rolled_up_Master_2025Data
+
+#7 Analyzed reporting / non-reporting patterns
+
+
+#REPORTING TABLE 1
+IM_analysis <- Rolled_up_Master_2025Data %>%
+ filter(!`Type of Mechanism` %in% c("Unallocated PM", "TBD")) %>%
+  summarise(
+    `Number of IMs with Budget`                          = sum(Budget == "Yes", na.rm = TRUE),
+    `Number of IMs Reporting Expenditures`               = sum(Expenditure == "Yes", na.rm = TRUE),
+    `Number of IMs with Budget but No Expenditures`      = sum(Budget == "Yes" & Expenditure == "No", na.rm = TRUE),
+    `Number of IMs with Budget and Expenditures`         = sum(Budget == "Yes" & Expenditure == "Yes", na.rm = TRUE),
+    `Number of IMs with No Budget but Expenditures`      = sum(Budget == "No" & Expenditure == "Yes", na.rm = TRUE)
+  ) %>%
+  tidyr::pivot_longer(
+    cols = everything(),
+    names_to = "Metric",
+    values_to = "Count"
+  )
+
+
+IM_analysis
+
+#REPORTING TABLE 2
+
+no_budget_analysis <- Rolled_up_Master_2025Data %>%
+   filter(!`Type of Mechanism` %in% c("Unallocated PM", "TBD")) %>%
+  filter(Budget == "Yes" & Expenditure == "No", na.rm = TRUE) %>%
+  summarise(
+    `Confirmed Terminated`    = sum(`STATUS` == "Terminated", na.rm = TRUE),
+    `Unknown or Not in AMFAR Database` = sum(`STATUS` %in% c("Unknown", "Not Found"), na.rm = TRUE),
+    `Active` = sum(`STATUS` == "Active", na.rm = TRUE)
+  ) %>%
+  tidyr::pivot_longer(
+    cols = everything(),
+    names_to = "Status Category",
+    values_to = "Count"
+  )
+
+no_budget_analysis
+
+#REPORTING TABLE 3
+
+agency_analysis <- Rolled_up_Master_2025Data %>%
+        dplyr::mutate(
+    `Funding Agency`= case_when(
+      `Funding Agency` %in% c("HHS/CDC") ~ "CDC",
+        `Funding Agency` %in% c("USAID") ~ "USAID",
+      TRUE ~ "Other")) %>% 
+    filter(!`Type of Mechanism` %in% c("Unallocated PM", "TBD")) %>%
+  filter(Budget == "Yes") %>%
+  group_by(`Funding Agency`) %>%
+  summarise(
+    `Total IMs with Budget`          = n(),
+    `Reporting Expenditures`         = sum(Expenditure == "Yes", na.rm = TRUE),
+    `Not Reporting Expenditures`     = sum(Expenditure == "No", na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    `Reporting Rate` = round((`Reporting Expenditures` / `Total IMs with Budget`) * 100, 1),
+    `Reporting Rate` = paste0(`Reporting Rate`, "%")
+  ) %>%
+  bind_rows(
+    summarise(.,
+      Agency                         = "Total",
+      `Total IMs with Budget`        = sum(`Total IMs with Budget`),
+      `Reporting Expenditures`       = sum(`Reporting Expenditures`),
+      `Not Reporting Expenditures`   = sum(`Not Reporting Expenditures`),
+      `Reporting Rate`               = paste0(round(sum(`Reporting Expenditures`) / sum(`Total IMs with Budget`) * 100, 1), "%")
+    )
+  )
+agency_analysis
+
+#REPORTING TABLE 4
+
+STATUS_analysis <- Rolled_up_Master_2025Data %>%
+    filter(!`Type of Mechanism` %in% c("Unallocated PM", "TBD")) %>%
+  filter(Budget == "Yes") %>%
+  group_by(`STATUS`) %>%
+  summarise(
+    `Total IMs with Budget`          = n(),
+    `Reporting Expenditures`         = sum(Expenditure == "Yes", na.rm = TRUE),
+    `Not Reporting Expenditures`     = sum(Expenditure == "No", na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    `Reporting Rate` = round((`Reporting Expenditures` / `Total IMs with Budget`) * 100, 1),
+    `Reporting Rate` = paste0(`Reporting Rate`, "%")
+  ) %>%
+  bind_rows(
+    summarise(.,
+      STATUS                         = "Total",
+      `Total IMs with Budget`        = sum(`Total IMs with Budget`),
+      `Reporting Expenditures`       = sum(`Reporting Expenditures`),
+      `Not Reporting Expenditures`   = sum(`Not Reporting Expenditures`),
+      `Reporting Rate`               = paste0(round(sum(`Reporting Expenditures`) / sum(`Total IMs with Budget`) * 100, 1), "%")
+    )
+  )
+STATUS_analysis
+
+#8 Created a list of the 512 mechanisms that were active, had a FY2025 budget, and reported FY2025 expenditures
+
+
+activemechs_analysis <- Rolled_up_Master_2025Data %>%
+   filter(!`Type of Mechanism` %in% c("Unallocated PM", "TBD")) %>%
+  filter(STATUS== "Active" & Budget == "Yes" & Expenditure == "Yes", na.rm = TRUE) %>% 
+    dplyr::mutate(Program_shifts = "Unaffected")  
+
+
+activemechs_analysis
+
+#9 Analyzed total expenditures and budgets by sub-program for the 512, and the share of total sub-program budget that the 512 represent
+
+
+
+
+```
